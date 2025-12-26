@@ -1,208 +1,179 @@
 
-import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { Point, Stroke, SyncMessage } from '../types';
-import { COLORS, LINE_WIDTHS, BROADCAST_CHANNEL_NAME } from '../constants';
+import React, { useRef, useEffect, useState } from "react"
+import { socket } from "@/src/socket"
+import { Point, Stroke } from "../types"
+import { COLORS, LINE_WIDTHS } from "../constants"
 
 interface WhiteboardProps {
-  roomId: string;
-  userId: string;
-  onCanvasUpdate?: (dataUrl: string) => void;
+  roomId: string
+  userId: string
+  onCanvasUpdate?: (dataUrl: string) => void
 }
 
 const Whiteboard: React.FC<WhiteboardProps> = ({ roomId, userId, onCanvasUpdate }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const contextRef = useRef<CanvasRenderingContext2D | null>(null);
-  
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [color, setColor] = useState(COLORS[0]);
-  const [lineWidth, setLineWidth] = useState(LINE_WIDTHS[1]);
-  const [strokes, setStrokes] = useState<Stroke[]>([]);
-  
-  const currentStrokePoints = useRef<Point[]>([]);
-  const broadcastChannel = useRef<BroadcastChannel | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const contextRef = useRef<CanvasRenderingContext2D | null>(null)
 
-  // Initialize BroadcastChannel for multi-tab sync
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [color, setColor] = useState(COLORS[0])
+  const [lineWidth, setLineWidth] = useState(LINE_WIDTHS[1])
+  const [strokes, setStrokes] = useState<Stroke[]>([])
+
+  const currentStroke = useRef<Point[]>([])
+
+  /* ================= SOCKET SETUP ================= */
   useEffect(() => {
-    broadcastChannel.current = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
-    
-    broadcastChannel.current.onmessage = (event) => {
-      const msg: SyncMessage = event.data;
-      if (msg.roomId !== roomId || msg.senderId === userId) return;
+    socket.emit("join-room", roomId)
 
-      if (msg.type === 'DRAW') {
-        setStrokes(prev => [...prev, msg.payload]);
-      } else if (msg.type === 'CLEAR') {
-        setStrokes([]);
-      } else if (msg.type === 'UNDO') {
-        setStrokes(prev => prev.slice(0, -1));
-      }
-    };
+    socket.on("draw", (stroke: Stroke) => {
+      setStrokes(prev => [...prev, stroke])
+    })
+
+    socket.on("clear", () => {
+      setStrokes([])
+    })
+
+    socket.on("undo", () => {
+      setStrokes(prev => prev.slice(0, -1))
+    })
 
     return () => {
-      broadcastChannel.current?.close();
-    };
-  }, [roomId, userId]);
+      socket.off("draw")
+      socket.off("clear")
+      socket.off("undo")
+    }
+  }, [roomId])
 
-  // Setup and Resize Handling
+  /* ================= CANVAS SETUP ================= */
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
+    const canvas = canvasRef.current
+    const container = containerRef.current
+    if (!canvas || !container) return
 
-    const updateCanvasSize = () => {
-      const rect = container.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
-      
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // Reset and apply scale
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        contextRef.current = ctx;
-        
-        // Redraw content after resize
-        drawAllStrokes(ctx, canvas);
-      }
-    };
+    const resizeCanvas = () => {
+      const rect = container.getBoundingClientRect()
+      const dpr = window.devicePixelRatio || 1
 
-    const resizeObserver = new ResizeObserver(() => {
-      updateCanvasSize();
-    });
+      canvas.width = rect.width * dpr
+      canvas.height = rect.height * dpr
 
-    resizeObserver.observe(container);
-    updateCanvasSize();
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
 
-    return () => resizeObserver.disconnect();
-  }, [strokes]); // Re-run if strokes change to ensure they are drawn on new context
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.lineCap = "round"
+      ctx.lineJoin = "round"
+      contextRef.current = ctx
 
-  const drawAllStrokes = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
-    // Save current transform
-    ctx.save();
-    // Reset transform to identity to clear the entire pixel grid
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    // Restore transform (the dpr scale)
-    ctx.restore();
+      redrawAll(ctx, canvas)
+    }
+
+    const observer = new ResizeObserver(resizeCanvas)
+    observer.observe(container)
+    resizeCanvas()
+
+    return () => observer.disconnect()
+  }, [strokes])
+
+  const redrawAll = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
+    ctx.save()
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.restore()
 
     strokes.forEach(stroke => {
-      if (stroke.points.length < 2) return;
-      ctx.beginPath();
-      ctx.strokeStyle = stroke.color;
-      ctx.lineWidth = stroke.width;
-      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-      for (let i = 1; i < stroke.points.length; i++) {
-        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
-      }
-      ctx.stroke();
-    });
-  };
+      if (stroke.points.length < 2) return
+      ctx.beginPath()
+      ctx.strokeStyle = stroke.color
+      ctx.lineWidth = stroke.width
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y)
+      stroke.points.forEach(p => ctx.lineTo(p.x, p.y))
+      ctx.stroke()
+    })
+  }
 
-  const getPos = (e: React.MouseEvent | React.TouchEvent | MouseEvent | TouchEvent): Point => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    
-    let clientX, clientY;
-    if ('touches' in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = (e as MouseEvent).clientX;
-      clientY = (e as MouseEvent).clientY;
+  /* ================= DRAWING LOGIC ================= */
+  const getPos = (e: React.MouseEvent | React.TouchEvent): Point => {
+    const canvas = canvasRef.current!
+    const rect = canvas.getBoundingClientRect()
+
+    if ("touches" in e) {
+      return {
+        x: e.touches[0].clientX - rect.left,
+        y: e.touches[0].clientY - rect.top,
+      }
     }
-    
+
     return {
-      x: clientX - rect.left,
-      y: clientY - rect.top
-    };
-  };
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    }
+  }
 
   const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-    // Prevent default to stop scrolling on mobile
-    if (e.cancelable) e.preventDefault();
-    
-    setIsDrawing(true);
-    const pos = getPos(e);
-    currentStrokePoints.current = [pos];
+    if (e.cancelable) e.preventDefault()
 
-    const ctx = contextRef.current;
-    if (ctx) {
-      ctx.beginPath();
-      ctx.moveTo(pos.x, pos.y);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = lineWidth;
-    }
-  };
+    setIsDrawing(true)
+    const pos = getPos(e)
+    currentStroke.current = [pos]
+
+    const ctx = contextRef.current
+    if (!ctx) return
+
+    ctx.beginPath()
+    ctx.moveTo(pos.x, pos.y)
+    ctx.strokeStyle = color
+    ctx.lineWidth = lineWidth
+  }
 
   const draw = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDrawing) return;
-    if (e.cancelable) e.preventDefault();
+    if (!isDrawing) return
+    if (e.cancelable) e.preventDefault()
 
-    const pos = getPos(e);
-    const points = currentStrokePoints.current;
-    const lastPos = points[points.length - 1];
-    
-    // Only add point if it's moved significantly to keep data lean
-    const dist = Math.sqrt(Math.pow(pos.x - lastPos.x, 2) + Math.pow(pos.y - lastPos.y, 2));
-    if (dist < 1) return;
+    const pos = getPos(e)
+    currentStroke.current.push(pos)
 
-    points.push(pos);
-    
-    const ctx = contextRef.current;
-    if (ctx) {
-      ctx.lineTo(pos.x, pos.y);
-      ctx.stroke();
-    }
-  };
+    const ctx = contextRef.current
+    if (!ctx) return
 
-  const endDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!isDrawing) return;
-    setIsDrawing(false);
+    ctx.lineTo(pos.x, pos.y)
+    ctx.stroke()
+  }
+
+  const endDrawing = () => {
+    if (!isDrawing) return
+    setIsDrawing(false)
 
     const newStroke: Stroke = {
-      id: Math.random().toString(36).substr(2, 9),
-      points: [...currentStrokePoints.current],
+      id: crypto.randomUUID(),
+      points: [...currentStroke.current],
       color,
-      width: lineWidth
-    };
+      width: lineWidth,
+    }
 
-    setStrokes(prev => [...prev, newStroke]);
-    
-    broadcastChannel.current?.postMessage({
-      type: 'DRAW',
-      payload: newStroke,
+    setStrokes(prev => [...prev, newStroke])
+
+    socket.emit("draw", {
       roomId,
-      senderId: userId
-    });
+      ...newStroke,
+    })
 
     if (onCanvasUpdate && canvasRef.current) {
-      onCanvasUpdate(canvasRef.current.toDataURL());
+      onCanvasUpdate(canvasRef.current.toDataURL())
     }
-  };
+  }
 
+  /* ================= ACTIONS ================= */
   const clearCanvas = () => {
-    setStrokes([]);
-    broadcastChannel.current?.postMessage({
-      type: 'CLEAR',
-      payload: null,
-      roomId,
-      senderId: userId
-    });
-  };
+    setStrokes([])
+    socket.emit("clear", { roomId })
+  }
 
   const undo = () => {
-    setStrokes(prev => prev.slice(0, -1));
-    broadcastChannel.current?.postMessage({
-      type: 'UNDO',
-      payload: null,
-      roomId,
-      senderId: userId
-    });
-  };
+    setStrokes(prev => prev.slice(0, -1))
+    socket.emit("undo", { roomId })
+  }
 
   return (
     <div className="flex flex-col h-full bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
