@@ -18,15 +18,28 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
+  // Join room
   socket.on("join-room", (roomId) => {
     socket.join(roomId);
-    socket.to(roomId).emit("user-joined", socket.id);
+    console.log(`User ${socket.id} joined room ${roomId}`);
   });
 
+  // Drawing
   socket.on("draw", (data) => {
     socket.to(data.roomId).emit("draw", data);
   });
 
+  // Clear canvas
+  socket.on("clear", ({ roomId }) => {
+    socket.to(roomId).emit("clear");
+  });
+
+  // Undo
+  socket.on("undo", ({ roomId }) => {
+    socket.to(roomId).emit("undo");
+  });
+
+  // Chat
   socket.on("chat-message", ({ roomId, message }) => {
     socket.to(roomId).emit("chat-message", message);
   });
@@ -36,10 +49,7 @@ io.on("connection", (socket) => {
   });
 });
 
-socket.on("clear", ({ roomId }) => socket.to(roomId).emit("clear"));
-socket.on("undo", ({ roomId }) => socket.to(roomId).emit("undo"));
-const PORT = process.env.PORT || 5000
-
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`)
-})
+  console.log(`Backend running on port ${PORT}`);
+});
