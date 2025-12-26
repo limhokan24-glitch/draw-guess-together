@@ -1,0 +1,5 @@
+{
+  "name": "SyncDraw - Collaborative Whiteboard",
+  "description": "A real-time collaborative whiteboard app for peer-to-peer drawing and chat synchronization.",
+  "requestFramePermissions": []
+}
